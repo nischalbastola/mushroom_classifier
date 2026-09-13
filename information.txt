@@ -1,0 +1,3 @@
+data matrix: 8124, 23
+edible, poisonous: 4208,3916
+no empty values.
