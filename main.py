@@ -1,6 +1,18 @@
 import numpy as np
 import pandas as pd
 
+
+def gini_impurity(labels):
+    """Return the Gini impurity of a group of labels."""
+    if len(labels) == 0:
+        return 0.0
+
+    _, counts = np.unique(labels, return_counts=True)
+    probabilities = counts / len(labels)
+
+    return 1.0 - np.sum(probabilities ** 2)
+
+
 df = pd.read_csv("data.csv")
 
 print(df.shape)
@@ -41,3 +53,7 @@ y_train = y[train_indices]
 y_test = y[test_indices]
 
 
+print("\nGini tests:")
+print("Pure edible:", gini_impurity(np.array([0, 0, 0])))
+print("Mixed:", gini_impurity(np.array([0, 1])))
+print("Training set:", gini_impurity(y_train))
