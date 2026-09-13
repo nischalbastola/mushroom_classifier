@@ -29,12 +29,15 @@ def split_gini_impurity(left_labels, right_labels):
     )
 
 
-def find_best_split(X_data, y_data):
-    """Find the one-hot feature with the lowest weighted Gini impurity."""
+def find_best_split(X_data, y_data, feature_indices=None):
+    """Find the feature with the lowest weighted Gini impurity."""
     best_feature = None
     best_gini = float("inf")
 
-    for feature_index in range(X_data.shape[1]):
+    if feature_indices is None:
+        feature_indices = range(X_data.shape[1])
+
+    for feature_index in feature_indices:
         left_mask = X_data[:, feature_index] == 0
         right_mask = X_data[:, feature_index] == 1
 
@@ -58,7 +61,15 @@ def majority_class(labels):
     return int(np.bincount(labels).argmax())
 
 
-def build_tree(X_data, y_data, depth=0, max_depth=8, min_samples_split=2):
+def build_tree(
+    X_data,
+    y_data,
+    depth=0,
+    max_depth=8,
+    min_samples_split=2,
+    max_features=None,
+    rng=None,
+):
     """Recursively build a binary decision tree from one-hot features."""
     node = {
         "prediction": majority_class(y_data),
@@ -75,7 +86,18 @@ def build_tree(X_data, y_data, depth=0, max_depth=8, min_samples_split=2):
         node["leaf"] = True
         return node
 
-    feature_index, split_gini = find_best_split(X_data, y_data)
+    if max_features is None:
+        max_features = max(1, int(np.sqrt(X_data.shape[1])))
+
+    if rng is None:
+        rng = np.random.default_rng(42)
+
+    feature_indices = rng.choice(
+        X_data.shape[1],
+        size=min(max_features, X_data.shape[1]),
+        replace=False,
+    )
+    feature_index, split_gini = find_best_split(X_data, y_data, feature_indices)
     if feature_index is None or split_gini >= gini_impurity(y_data):
         node["leaf"] = True
         return node
@@ -92,6 +114,8 @@ def build_tree(X_data, y_data, depth=0, max_depth=8, min_samples_split=2):
         depth + 1,
         max_depth,
         min_samples_split,
+        max_features,
+        rng,
     )
     node["right"] = build_tree(
         X_data[right_mask],
@@ -99,6 +123,8 @@ def build_tree(X_data, y_data, depth=0, max_depth=8, min_samples_split=2):
         depth + 1,
         max_depth,
         min_samples_split,
+        max_features,
+        rng,
     )
     return node
 
@@ -116,6 +142,53 @@ def predict_tree(node, row):
 def predict_tree_batch(tree, X_data):
     """Predict labels for every row in a feature matrix."""
     return np.array([predict_tree(tree, row) for row in X_data], dtype=np.int8)
+
+
+def train_random_forest(
+    X_data,
+    y_data,
+    n_trees=25,
+    max_depth=8,
+    min_samples_split=2,
+    seed=123,
+):
+    """Train trees on bootstrap samples with random features at each split."""
+    rng = np.random.default_rng(seed)
+    trees = []
+
+    for _ in range(n_trees):
+        sample_indices = rng.integers(0, len(X_data), size=len(X_data))
+        tree = build_tree(
+            X_data[sample_indices],
+            y_data[sample_indices],
+            max_depth=max_depth,
+            min_samples_split=min_samples_split,
+            rng=rng,
+        )
+        trees.append(tree)
+
+    return trees
+
+
+def predict_forest(trees, X_data):
+    """Predict by majority vote across all trees."""
+    tree_predictions = np.array(
+        [predict_tree_batch(tree, X_data) for tree in trees],
+        dtype=np.int8,
+    )
+    return (np.mean(tree_predictions, axis=0) >= 0.5).astype(np.int8)
+
+
+def evaluate_predictions(actual, predicted):
+    """Return accuracy and a confusion matrix in [actual, predicted] order."""
+    confusion_matrix = np.zeros((2, 2), dtype=np.int64)
+    np.add.at(confusion_matrix, (actual, predicted), 1)
+
+    accuracy = np.mean(actual == predicted)
+    poisonous_recall = confusion_matrix[1, 1] / max(
+        1, confusion_matrix[1].sum()
+    )
+    return accuracy, poisonous_recall, confusion_matrix
 
 
 df = pd.read_csv("data.csv")
@@ -171,7 +244,23 @@ print("Weighted Gini:", best_gini)
 
 tree = build_tree(X_train, y_train, max_depth=8)
 tree_predictions = predict_tree_batch(tree, X_test)
-tree_accuracy = np.mean(tree_predictions == y_test)
+tree_accuracy, tree_recall, tree_matrix = evaluate_predictions(
+    y_test, tree_predictions
+)
 
 print("\nDecision tree:")
 print("Test accuracy:", tree_accuracy)
+print("Poisonous recall:", tree_recall)
+print("Confusion matrix:\n", tree_matrix)
+
+forest = train_random_forest(X_train, y_train, n_trees=25, max_depth=8)
+forest_predictions = predict_forest(forest, X_test)
+forest_accuracy, forest_recall, forest_matrix = evaluate_predictions(
+    y_test, forest_predictions
+)
+
+print("\nRandom forest:")
+print("Trees:", len(forest))
+print("Test accuracy:", forest_accuracy)
+print("Poisonous recall:", forest_recall)
+print("Confusion matrix:\n", forest_matrix)
